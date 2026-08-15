@@ -24,6 +24,21 @@ from .utils import build_default_jql, days_since
 _CREATE_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 
+def send_test_notification(console: Console) -> None:
+    """Raise a sample desktop notification, independent of any ticket state.
+
+    Lets you confirm the notification path itself works — run it under the same
+    interpreter the scheduler uses (``pythonw -m jira_tool notify-test``) to tell
+    a broken toast apart from simply having no stale tickets.
+    """
+    _desktop_notify(
+        "jira-tool test",
+        "Desktop notifications are working. You'll get one like this when a "
+        "ticket needs an update.",
+        console,
+    )
+
+
 def run_remind(config: Config, console: Console, notify: bool = False) -> int:
     """Print the active-ticket report. Returns the number of stale tickets.
 
@@ -94,11 +109,27 @@ def _desktop_notify(title: str, message: str, console: Console) -> None:
         console.print(f"[dim]{_no_notifier_hint()}[/dim]")
         return
     try:
-        # CREATE_NO_WINDOW keeps the notifier's own console (PowerShell on
-        # Windows) from flashing when the reminder runs windowless via pythonw.
-        subprocess.run(command, check=False, timeout=15, creationflags=_CREATE_NO_WINDOW)
+        # Redirect the child's stdio explicitly: when the reminder runs under
+        # pythonw.exe (windowless, e.g. from Task Scheduler) the parent has no
+        # valid std handles, and a child that inherits them can fail silently.
+        # stdin from DEVNULL, output captured so a real error isn't lost.
+        # CREATE_NO_WINDOW keeps the notifier's own console (PowerShell) hidden.
+        result = subprocess.run(
+            command,
+            check=False,
+            timeout=15,
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            creationflags=_CREATE_NO_WINDOW,
+        )
     except (OSError, subprocess.TimeoutExpired) as exc:
         console.print(f"[dim]Desktop notification failed: {exc}[/dim]")
+        return
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout or "").strip().splitlines()
+        first = detail[0] if detail else f"exit code {result.returncode}"
+        console.print(f"[dim]Desktop notification failed: {first}[/dim]")
 
 
 def _notify_command(title: str, message: str) -> Optional[List[str]]:

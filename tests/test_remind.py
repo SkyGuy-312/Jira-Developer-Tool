@@ -14,7 +14,15 @@ from jira_tool.remind import (
     _notify_command,
     _powershell_string,
     run_remind,
+    send_test_notification,
 )
+
+
+class FakeCompleted:
+    def __init__(self, returncode=0, stdout="", stderr=""):
+        self.returncode = returncode
+        self.stdout = stdout
+        self.stderr = stderr
 
 
 def make_config():
@@ -107,6 +115,53 @@ def test_run_remind_notifies_on_connection_failure(monkeypatch):
 
     assert len(calls) == 1
     assert "VPN" in calls[0][1]
+
+
+def test_desktop_notify_redirects_stdio_and_hides_window(monkeypatch):
+    monkeypatch.setattr(remind, "_notify_command", lambda t, m: ["notifier", t, m])
+    captured = {}
+
+    def fake_run(command, **kwargs):
+        captured.update(kwargs)
+        return FakeCompleted(returncode=0)
+
+    monkeypatch.setattr(remind.subprocess, "run", fake_run)
+    _desktop_notify("t", "m", Console(file=StringIO()))
+
+    # stdin from DEVNULL so a windowless (pythonw) parent's invalid handles
+    # aren't inherited; output captured; window hidden.
+    assert captured["stdin"] == remind.subprocess.DEVNULL
+    assert captured["capture_output"] is True
+    assert "creationflags" in captured
+
+
+def test_desktop_notify_surfaces_failure(monkeypatch):
+    monkeypatch.setattr(remind, "_notify_command", lambda t, m: ["notifier"])
+    monkeypatch.setattr(
+        remind.subprocess, "run",
+        lambda command, **kwargs: FakeCompleted(returncode=1, stderr="toast API blew up"),
+    )
+    output = StringIO()
+    _desktop_notify("t", "m", Console(file=output, width=200))
+    assert "toast API blew up" in output.getvalue()
+
+
+def test_desktop_notify_silent_on_success(monkeypatch):
+    monkeypatch.setattr(remind, "_notify_command", lambda t, m: ["notifier"])
+    monkeypatch.setattr(
+        remind.subprocess, "run", lambda command, **kwargs: FakeCompleted(returncode=0)
+    )
+    output = StringIO()
+    _desktop_notify("t", "m", Console(file=output, width=200))
+    assert "failed" not in output.getvalue()
+
+
+def test_send_test_notification_uses_desktop_notify(monkeypatch):
+    calls = []
+    monkeypatch.setattr(remind, "_desktop_notify", lambda t, m, c: calls.append((t, m)))
+    send_test_notification(Console(file=StringIO()))
+    assert len(calls) == 1
+    assert "working" in calls[0][1].lower()
 
 
 def test_run_remind_reraises_without_notify_when_flag_off(monkeypatch):
