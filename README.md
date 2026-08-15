@@ -67,6 +67,40 @@ During a check-in, each ticket offers:
 Both `checkin` and `list` accept `--jql` to override the default query
 (`assignee = currentUser() AND status in (...) ORDER BY updated ASC`).
 
+## Git-aware drafting
+
+The update you keep forgetting to write is usually sitting in your git log.
+Point the tool at your local repos and the check-in drafts it for you:
+
+```json
+"repos": ["C:/work/backend", "C:/work/frontend"]
+```
+
+(Set during `jira-tool setup`, or add the `"repos"` list to the config file.)
+
+With repos configured, `jira-tool checkin` shows a **Git activity** panel under
+any ticket you've committed to since it was last updated in Jira — the commits,
+which repo they're in, and an estimated time — plus a new `a` (accept draft)
+action that posts a progress comment built from your commit subjects and logs
+the estimated time in one step. You confirm or edit both before anything is
+sent; `c`/`l` still work for writing your own.
+
+How commits are matched and time is estimated (deliberately simple, always
+shown before posting):
+
+- A commit belongs to a ticket when the key appears in its subject
+  (`PROJ-123: fix redirect`), or — for commits with no key in the subject —
+  when it sits only on a branch named after the ticket
+  (`proj-123-fix-login`). Only *your* commits count (each repo's
+  `user.email`; override with `"git_author"` in the config).
+- Time is estimated by clustering commit timestamps into sessions (an hour's
+  gap starts a new one); each session spans first-to-last commit plus 30
+  minutes of lead-in, rounded up to a quarter hour.
+
+`jira-tool activity` previews everything drafting sees — per-ticket commits,
+estimates, and draft comments — without touching Jira. Lookback is capped by
+`"git_lookback_days"` (default 14).
+
 ## Scheduling the reminder
 
 Let the tool set up the schedule for you — no schtasks or crontab wrangling:
@@ -160,14 +194,11 @@ pytest
 ```
 
 Layout: `src/jira_tool/` — `jira_client.py` (thin REST v2 wrapper),
-`checkin.py` (interactive flow), `remind.py` (staleness report),
-`schedule.py` (scheduler backends), `cli.py` (Typer entry points),
-`config.py`, `display.py`, `utils.py`.
+`checkin.py` (interactive flow), `git_activity.py` (drafting from commits),
+`remind.py` (staleness report), `schedule.py` (scheduler backends),
+`cli.py` (Typer entry points), `config.py`, `display.py`, `utils.py`.
 
 ## Roadmap
 
-- **Git-aware drafting** — read your recent branches/commits (branch names
-  usually carry the ticket key), draft the day's comment and a time estimate
-  from them, so a check-in becomes "accept / edit / skip" per ticket.
 - Detect merged PRs and suggest closing the matching ticket.
 - Tempo worklog support, if native worklogs aren't what your team uses.

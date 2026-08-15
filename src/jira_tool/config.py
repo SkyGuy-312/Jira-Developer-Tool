@@ -37,6 +37,11 @@ class Config:
     statuses: List[str] = field(default_factory=lambda: list(DEFAULT_STATUSES))
     stale_after_days: float = 2.0
     verify_ssl: Union[bool, str] = True  # True/False, or a path to a CA bundle
+    # Git-aware drafting: local repositories to scan for recent commits.
+    repos: List[str] = field(default_factory=list)
+    git_lookback_days: float = 14.0
+    # Only commits by this author feed drafts; empty = each repo's user.email.
+    git_author: str = ""
 
     def __post_init__(self) -> None:
         self.base_url = self.base_url.rstrip("/")

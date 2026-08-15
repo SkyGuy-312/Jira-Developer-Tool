@@ -8,10 +8,18 @@ import typer
 from rich.console import Console
 from rich.prompt import Confirm, FloatPrompt, Prompt
 
+from datetime import datetime, timedelta, timezone
+
 from . import __version__
 from .checkin import run_checkin
 from .config import DEFAULT_STATUSES, Config, ConfigError, load_config, save_config
 from .display import issue_table
+from .git_activity import (
+    GitActivityError,
+    collect_activity,
+    draft_comment,
+    format_duration,
+)
 from .jira_client import JiraClient, JiraError
 from .remind import run_remind, send_test_notification
 from .schedule import (
@@ -66,6 +74,11 @@ def setup() -> None:
     stale_after_days = FloatPrompt.ask(
         "Days without an update before a ticket counts as stale", default=2.0
     )
+    repos_raw = Prompt.ask(
+        "Local git repos to scan for draft updates (comma-separated paths, optional)",
+        default="",
+    )
+    repos: List[str] = [part.strip() for part in repos_raw.split(",") if part.strip()]
 
     config = Config(
         base_url=base_url,
@@ -74,6 +87,7 @@ def setup() -> None:
         token=token,
         statuses=statuses or list(DEFAULT_STATUSES),
         stale_after_days=stale_after_days,
+        repos=repos,
     )
 
     console.print("Testing the connection…")
@@ -204,6 +218,44 @@ def schedule_remove(
     except ScheduleError as exc:
         console.print(f"[red]{exc}[/red]")
         raise typer.Exit(code=1)
+
+
+@app.command()
+def activity(
+    days: Optional[float] = typer.Option(
+        None, "--days", help="Look back this many days (default: git_lookback_days)."
+    ),
+) -> None:
+    """Show recent git activity grouped by ticket key — what drafting will see."""
+    config = _load_config_or_exit()
+    if not config.repos:
+        console.print(
+            "[yellow]No repos configured.[/yellow] Add a \"repos\" list to your "
+            "config file (or re-run [bold]jira-tool setup[/bold])."
+        )
+        raise typer.Exit(code=1)
+    since = datetime.now(timezone.utc) - timedelta(days=days or config.git_lookback_days)
+    try:
+        activity_map = collect_activity(config.repos, since, config.git_author or None)
+    except GitActivityError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(code=1)
+    if not activity_map:
+        console.print("[dim]No ticket-linked commits found in the lookback window.[/dim]")
+        return
+    for key in sorted(activity_map):
+        ticket = activity_map[key]
+        estimate = format_duration(ticket.estimated_minutes)
+        console.print(
+            f"\n[bold cyan]{key}[/bold cyan] — {len(ticket.commits)} commit(s), "
+            f"estimated [bold]{estimate}[/bold]"
+        )
+        for commit in ticket.commits:
+            when = commit.when.astimezone().strftime("%a %d %b %H:%M")
+            console.print(f"  [dim]{when}[/dim] {commit.subject} [dim]({commit.repo})[/dim]")
+        console.print("[dim]Draft comment:[/dim]")
+        for line in draft_comment(ticket).splitlines():
+            console.print(f"  [dim]{line}[/dim]")
 
 
 @app.command("notify-test")

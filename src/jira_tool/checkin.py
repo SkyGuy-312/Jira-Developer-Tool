@@ -7,6 +7,7 @@ transition/close the ticket with a resolution, or skip to the next one.
 from __future__ import annotations
 
 import webbrowser
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 from rich.console import Console
@@ -16,13 +17,21 @@ from rich.table import Table
 
 from .config import Config
 from .display import format_age, staleness_style
+from .git_activity import (
+    GitActivityError,
+    TicketActivity,
+    collect_activity,
+    draft_comment,
+    format_duration,
+)
 from .jira_client import JiraClient, JiraError
-from .utils import build_default_jql, days_since, is_valid_duration
+from .utils import build_default_jql, days_since, is_valid_duration, parse_jira_datetime
 
 _MENU = (
     "[bold]c[/bold]omment  [bold]l[/bold]og work  [bold]d[/bold]one/close  "
     "[bold]o[/bold]pen in browser  [bold]n[/bold]ext  [bold]q[/bold]uit"
 )
+_MENU_WITH_DRAFT = "[bold]a[/bold]ccept draft  " + _MENU
 
 Action = Tuple[str, str, str]  # (issue key, action, detail)
 
@@ -34,12 +43,38 @@ def run_checkin(config: Config, console: Console, jql: Optional[str] = None) -> 
         console.print("[green]No active tickets found — nothing to check in on.[/green]")
         return
 
+    activity_map = _collect_activity_map(config, console)
     console.print(f"\n[bold]{len(issues)} active ticket(s) to review.[/bold]")
     actions: List[Action] = []
     for index, issue in enumerate(issues, start=1):
-        if not _review_issue(client, config, console, issue, index, len(issues), actions):
+        activity = _activity_for_issue(activity_map, issue)
+        if not _review_issue(
+            client, config, console, issue, index, len(issues), actions, activity
+        ):
             break
     _print_summary(console, actions)
+
+
+def _collect_activity_map(config: Config, console: Console) -> Dict[str, TicketActivity]:
+    if not config.repos:
+        return {}
+    since = datetime.now(timezone.utc) - timedelta(days=config.git_lookback_days)
+    try:
+        return collect_activity(config.repos, since, config.git_author or None)
+    except GitActivityError as exc:
+        console.print(f"[yellow]Git drafting unavailable: {exc}[/yellow]")
+        return {}
+
+
+def _activity_for_issue(
+    activity_map: Dict[str, TicketActivity], issue: Dict[str, Any]
+) -> Optional[TicketActivity]:
+    """Commits for this ticket newer than its last Jira update — the gap to fill."""
+    activity = activity_map.get(issue["key"])
+    if activity is None:
+        return None
+    recent = activity.newer_than(parse_jira_datetime(issue["fields"]["updated"]))
+    return recent if recent.commits else None
 
 
 def _review_issue(
@@ -50,15 +85,22 @@ def _review_issue(
     index: int,
     total: int,
     actions: List[Action],
+    activity: Optional[TicketActivity] = None,
 ) -> bool:
     """Review one issue. Returns False when the user quits the check-in."""
     key = issue["key"]
     console.print(_issue_panel(config, issue, index, total))
+    if activity is not None:
+        console.print(_activity_panel(activity))
+    menu = _MENU_WITH_DRAFT if activity is not None else _MENU
+    choices = (["a"] if activity is not None else []) + ["c", "l", "d", "o", "n", "q"]
     while True:
-        console.print(_MENU)
-        choice = Prompt.ask("Action", choices=["c", "l", "d", "o", "n", "q"], default="n")
+        console.print(menu)
+        choice = Prompt.ask("Action", choices=choices, default="n")
         try:
-            if choice == "c":
+            if choice == "a" and activity is not None:
+                _do_accept_draft(client, console, key, activity, actions)
+            elif choice == "c":
                 _do_comment(client, console, key, actions)
             elif choice == "l":
                 _do_worklog(client, console, key, actions)
@@ -90,6 +132,47 @@ def _issue_panel(config: Config, issue: Dict[str, Any], index: int, total: int) 
         f"[dim]{config.browse_url(key)}[/dim]"
     )
     return Panel(body, title=f"[bold cyan]{key}[/bold cyan] ({index}/{total})")
+
+
+def _activity_panel(activity: TicketActivity) -> Panel:
+    lines = []
+    for commit in activity.commits:
+        when = commit.when.astimezone().strftime("%a %d %b %H:%M")
+        lines.append(f"[dim]{when}[/dim] {commit.subject} [dim]({commit.repo})[/dim]")
+    lines.append(
+        f"\nEstimated time: [bold]{format_duration(activity.estimated_minutes)}[/bold] "
+        f"from {len(activity.commits)} commit(s)"
+    )
+    return Panel("\n".join(lines), title="Git activity since last update", border_style="dim")
+
+
+def _do_accept_draft(
+    client: JiraClient,
+    console: Console,
+    key: str,
+    activity: TicketActivity,
+    actions: List[Action],
+) -> None:
+    draft = draft_comment(activity)
+    console.print(Panel(draft, title="Draft comment"))
+    if not Confirm.ask("Post this comment?", default=True):
+        console.print("[dim]Cancelled — use 'c' to write your own instead.[/dim]")
+        return
+    estimate = format_duration(activity.estimated_minutes)
+    while True:
+        time_spent = Prompt.ask(
+            "Log time (edit freely; 'skip' logs nothing)", default=estimate
+        )
+        if time_spent == "skip" or is_valid_duration(time_spent):
+            break
+        console.print("[red]That doesn't look like a Jira duration (use w/d/h/m units).[/red]")
+    client.add_comment(key, draft)
+    actions.append((key, "comment", _truncate(draft)))
+    console.print(f"[green]Comment posted to {key}.[/green]")
+    if time_spent != "skip":
+        client.add_worklog(key, time_spent, comment="")
+        actions.append((key, "worklog", time_spent))
+        console.print(f"[green]Logged {time_spent} on {key}.[/green]")
 
 
 def _read_multiline(console: Console, intro: str) -> str:
