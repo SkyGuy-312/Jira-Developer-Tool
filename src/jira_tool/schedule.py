@@ -29,8 +29,10 @@ _TIME_RE = re.compile(r"^(\d{1,2}):(\d{2})$")
 CRON_BEGIN = "# >>> jira-tool reminders >>>"
 CRON_END = "# <<< jira-tool reminders <<<"
 
-# Canonical week order used for output and range expansion.
+# Canonical week order used internally for range expansion and schedule
+# mapping. Display uses Sunday-first ordering (see _DISPLAY_ORDER).
 _DAY_ORDER = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
+_DISPLAY_ORDER = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"]
 _ALL_DAYS = list(_DAY_ORDER)
 _WEEKDAYS = ["mon", "tue", "wed", "thu", "fri"]
 _WEEKENDS = ["sat", "sun"]
@@ -124,15 +126,15 @@ def _expand_range(start: str, end: str) -> List[str]:
 
 
 def format_days(days: Sequence[str]) -> str:
-    """Human-readable day summary for listings."""
-    days = [d for d in _DAY_ORDER if d in set(days)]
-    if days == _ALL_DAYS:
+    """Human-readable day summary for listings (Sunday-first)."""
+    chosen = set(days)
+    if chosen == set(_ALL_DAYS):
         return "every day"
-    if days == _WEEKDAYS:
+    if chosen == set(_WEEKDAYS):
         return "weekdays"
-    if days == _WEEKENDS:
+    if chosen == set(_WEEKENDS):
         return "weekends"
-    return ", ".join(d.capitalize() for d in days)
+    return ", ".join(d.capitalize() for d in _DISPLAY_ORDER if d in chosen)
 
 
 def schtasks_day_list(days: Sequence[str]) -> str:

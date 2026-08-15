@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "jira-developer-tool"
-version = "0.1.4"
+version = "0.1.5"
 description = "Interactive daily check-in CLI that keeps your Jira tickets updated: comments, worklogs, and closing with resolutions."
 readme = "README.md"
 requires-python = ">=3.9"

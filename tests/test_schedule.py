@@ -79,7 +79,9 @@ def test_format_days_uses_friendly_labels():
     assert format_days(["mon", "tue", "wed", "thu", "fri"]) == "weekdays"
     assert format_days(["sat", "sun"]) == "weekends"
     assert format_days(schedule._ALL_DAYS) == "every day"
-    assert format_days(["sun", "mon", "tue"]) == "Mon, Tue, Sun"
+    # Explicit lists render Sunday-first.
+    assert format_days(["sun", "mon", "tue"]) == "Sun, Mon, Tue"
+    assert format_days(parse_days("sun-thu")) == "Sun, Mon, Tue, Wed, Thu"
 
 
 def test_schtasks_day_list_is_upper_and_ordered():
