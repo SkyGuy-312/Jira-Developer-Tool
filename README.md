@@ -78,6 +78,14 @@ Cron (Linux/macOS), weekdays at 16:30:
 Windows Task Scheduler: create a daily task running
 `jira-tool.exe remind --notify`.
 
+`--notify` picks a notification backend per platform:
+
+- **Linux**: `notify-send` — install libnotify if it's missing
+  (e.g. `sudo apt install libnotify-bin`)
+- **macOS**: the built-in `osascript`
+- **Windows**: a toast notification via Windows PowerShell (no setup needed);
+  this also works from inside WSL through `powershell.exe`
+
 ## Development
 
 ```bash

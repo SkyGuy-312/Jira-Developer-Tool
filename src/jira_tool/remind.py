@@ -6,10 +6,11 @@ raises a desktop notification when stale tickets exist.
 
 from __future__ import annotations
 
+import base64
 import shutil
 import subprocess
 import sys
-from typing import Any, Dict, List
+from typing import List, Optional
 
 from rich.console import Console
 
@@ -52,15 +53,82 @@ def run_remind(config: Config, console: Console, notify: bool = False) -> int:
 
 
 def _desktop_notify(title: str, message: str, console: Console) -> None:
-    if shutil.which("notify-send"):
-        command = ["notify-send", title, message]
-    elif sys.platform == "darwin" and shutil.which("osascript"):
-        script = f'display notification "{message}" with title "{title}"'
-        command = ["osascript", "-e", script]
-    else:
-        console.print("[dim]No desktop notification tool found; skipping --notify.[/dim]")
+    command = _notify_command(title, message)
+    if command is None:
+        console.print(f"[dim]{_no_notifier_hint()}[/dim]")
         return
     try:
-        subprocess.run(command, check=False, timeout=10)
-    except OSError as exc:
+        subprocess.run(command, check=False, timeout=15)
+    except (OSError, subprocess.TimeoutExpired) as exc:
         console.print(f"[dim]Desktop notification failed: {exc}[/dim]")
+
+
+def _notify_command(title: str, message: str) -> Optional[List[str]]:
+    """Build the notification command for this platform, or None if unsupported."""
+    if shutil.which("notify-send"):
+        return ["notify-send", "-a", "jira-tool", title, message]
+    if sys.platform == "darwin" and shutil.which("osascript"):
+        script = (
+            f"display notification {_applescript_string(message)} "
+            f"with title {_applescript_string(title)}"
+        )
+        return ["osascript", "-e", script]
+    powershell = _find_powershell()
+    if powershell:
+        return [
+            powershell,
+            "-NoProfile",
+            "-NonInteractive",
+            "-EncodedCommand",
+            _encode_powershell(_toast_script(title, message)),
+        ]
+    return None
+
+
+def _find_powershell() -> Optional[str]:
+    if sys.platform == "win32":
+        # Prefer Windows PowerShell 5.1: it ships with Windows and can load
+        # the WinRT toast types directly, which pwsh 7 cannot.
+        return shutil.which("powershell") or shutil.which("pwsh")
+    # Inside WSL, Windows PowerShell is usually reachable as powershell.exe.
+    return shutil.which("powershell.exe")
+
+
+def _no_notifier_hint() -> str:
+    if sys.platform.startswith("linux"):
+        return (
+            "No notification tool found; install libnotify to enable --notify "
+            "(e.g. 'sudo apt install libnotify-bin')."
+        )
+    if sys.platform == "win32":
+        return "PowerShell was not found on PATH; cannot raise a desktop notification."
+    return "No desktop notification tool found; skipping --notify."
+
+
+def _applescript_string(value: str) -> str:
+    return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def _powershell_string(value: str) -> str:
+    return "'" + value.replace("'", "''") + "'"
+
+
+def _toast_script(title: str, message: str) -> str:
+    # Uses Windows PowerShell's registered AppUserModelID so the toast is
+    # allowed to display without registering our own app identity.
+    app_id = r"{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\WindowsPowerShell\v1.0\powershell.exe"
+    return "\n".join(
+        [
+            "[Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] | Out-Null",
+            "$template = [Windows.UI.Notifications.ToastNotificationManager]::GetTemplateContent([Windows.UI.Notifications.ToastTemplateType]::ToastText02)",
+            "$texts = $template.GetElementsByTagName('text')",
+            f"$null = $texts.Item(0).AppendChild($template.CreateTextNode({_powershell_string(title)}))",
+            f"$null = $texts.Item(1).AppendChild($template.CreateTextNode({_powershell_string(message)}))",
+            f"$appId = '{app_id}'",
+            "[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier($appId).Show([Windows.UI.Notifications.ToastNotification]::new($template))",
+        ]
+    )
+
+
+def _encode_powershell(script: str) -> str:
+    return base64.b64encode(script.encode("utf-16-le")).decode("ascii")
