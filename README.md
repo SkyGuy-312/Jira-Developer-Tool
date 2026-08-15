@@ -69,14 +69,40 @@ Both `checkin` and `list` accept `--jql` to override the default query
 
 ## Scheduling the reminder
 
-Cron (Linux/macOS), weekdays at 16:30:
+Let the tool set up the schedule for you — no schtasks or crontab wrangling:
 
-```cron
-30 16 * * 1-5 DISPLAY=:0 /path/to/jira-tool remind --notify
+```bash
+jira-tool schedule add --at 12:30 --at 16:30   # two reminders, weekdays
+jira-tool schedule add --at 09:00 --daily      # every day, incl. weekends
+jira-tool schedule list                        # what's scheduled
+jira-tool schedule remove --at 12:30           # drop one
+jira-tool schedule remove                      # drop all jira-tool reminders
 ```
 
-Windows Task Scheduler: create a daily task running
-`jira-tool.exe remind --notify`.
+Pass `--at` as many times as you like (or comma-separate: `--at 12:30,16:30`)
+to get several reminders a day. Add `--no-notify` if you'd rather it just log
+to the console without a popup.
+
+Reminders **run in the background** — no console window flashes when they fire:
+
+- **Windows**: each time becomes a Task Scheduler entry whose action is
+  `pythonw.exe -m jira_tool remind --notify` (pythonw is the windowless Python
+  interpreter), and the toast's own PowerShell call is suppressed too. Tasks run
+  only while you're logged in, so the toast can reach your desktop.
+- **Linux/macOS**: a delimited block in your crontab (other crontab entries are
+  left untouched).
+
+### Doing it by hand
+
+If you prefer, schedule it yourself. Cron (Linux/macOS), weekdays at 16:30:
+
+```cron
+30 16 * * 1-5 DISPLAY=:0 /path/to/pythonw -m jira_tool remind --notify
+```
+
+Windows Task Scheduler: a daily task running
+`pythonw.exe -m jira_tool remind --notify` (use `pythonw`, not `jira-tool.exe`,
+to avoid a console window).
 
 When `--notify` is set, a toast is also raised if the tool **can't reach Jira
 at all** — e.g. you're off the VPN. Instead of a silent scheduled run that you'd
@@ -100,7 +126,8 @@ pytest
 
 Layout: `src/jira_tool/` — `jira_client.py` (thin REST v2 wrapper),
 `checkin.py` (interactive flow), `remind.py` (staleness report),
-`cli.py` (Typer entry points), `config.py`, `display.py`, `utils.py`.
+`schedule.py` (scheduler backends), `cli.py` (Typer entry points),
+`config.py`, `display.py`, `utils.py`.
 
 ## Roadmap
 

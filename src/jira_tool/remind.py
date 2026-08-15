@@ -20,6 +20,9 @@ from .display import issue_table
 from .jira_client import JiraClient, JiraError
 from .utils import build_default_jql, days_since
 
+# Present on Windows only; 0 elsewhere so it's a no-op flag.
+_CREATE_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
 
 def run_remind(config: Config, console: Console, notify: bool = False) -> int:
     """Print the active-ticket report. Returns the number of stale tickets.
@@ -91,7 +94,9 @@ def _desktop_notify(title: str, message: str, console: Console) -> None:
         console.print(f"[dim]{_no_notifier_hint()}[/dim]")
         return
     try:
-        subprocess.run(command, check=False, timeout=15)
+        # CREATE_NO_WINDOW keeps the notifier's own console (PowerShell on
+        # Windows) from flashing when the reminder runs windowless via pythonw.
+        subprocess.run(command, check=False, timeout=15, creationflags=_CREATE_NO_WINDOW)
     except (OSError, subprocess.TimeoutExpired) as exc:
         console.print(f"[dim]Desktop notification failed: {exc}[/dim]")
 
