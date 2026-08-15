@@ -108,6 +108,25 @@ Reminders **run in the background** — no console window flashes when they fire
 - **Linux/macOS**: a delimited block in your crontab (other crontab entries are
   left untouched).
 
+### The reminder runs but no toast appears
+
+Two things to check, in order:
+
+1. **Is a ticket actually stale?** A reminder only pops a toast when a ticket
+   has gone `stale_after_days` without an update (or when Jira can't be reached).
+   If everything's fresh, a silent run is correct. Run `jira-tool list` to see.
+2. **Does the notification path work at all?** Verify it independently of ticket
+   state — run it under the *same interpreter the scheduler uses*:
+
+   ```powershell
+   jira-tool notify-test                    # console interpreter
+   pythonw -m jira_tool notify-test         # the windowless one the task uses
+   ```
+
+   If the first shows a toast but the second doesn't, the issue is the
+   windowless path; if neither does, it's your notification settings (Focus
+   Assist / Do Not Disturb, or notifications disabled for the app).
+
 ### Doing it by hand
 
 If you prefer, schedule it yourself. Cron (Linux/macOS), weekdays at 16:30:

@@ -13,7 +13,7 @@ from .checkin import run_checkin
 from .config import DEFAULT_STATUSES, Config, ConfigError, load_config, save_config
 from .display import issue_table
 from .jira_client import JiraClient, JiraError
-from .remind import run_remind
+from .remind import run_remind, send_test_notification
 from .schedule import (
     ScheduleError,
     add_reminders,
@@ -204,6 +204,13 @@ def schedule_remove(
     except ScheduleError as exc:
         console.print(f"[red]{exc}[/red]")
         raise typer.Exit(code=1)
+
+
+@app.command("notify-test")
+def notify_test() -> None:
+    """Raise a sample desktop notification to verify --notify works."""
+    send_test_notification(console)
+    console.print("Sent a test notification. If none appeared, see the note above.")
 
 
 @app.command()
