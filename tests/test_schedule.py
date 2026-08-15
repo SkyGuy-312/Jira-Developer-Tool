@@ -1,4 +1,7 @@
+import io
+
 import pytest
+from rich.console import Console
 
 from jira_tool import schedule
 from jira_tool.schedule import (
@@ -7,15 +10,23 @@ from jira_tool.schedule import (
     ScheduleError,
     build_crontab,
     cron_command,
+    cron_day_field,
+    cron_field_to_days,
     cron_line,
+    format_days,
     normalize_times,
-    parse_block_times,
+    parse_block_entries,
+    parse_days,
     parse_task_times,
+    schtasks_day_list,
     strip_managed_block,
     task_name,
     windows_action,
     windows_create_args,
 )
+
+
+# --- times ---------------------------------------------------------------------
 
 
 def test_normalize_times_dedups_sorts_and_pads():
@@ -32,6 +43,59 @@ def test_normalize_times_rejects_invalid(bad):
         normalize_times([bad])
 
 
+# --- days ----------------------------------------------------------------------
+
+
+def test_parse_days_keywords():
+    assert parse_days("weekdays") == ["mon", "tue", "wed", "thu", "fri"]
+    assert parse_days("weekends") == ["sat", "sun"]
+    assert parse_days("daily") == ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
+
+
+def test_parse_days_list_is_ordered_and_deduped():
+    assert parse_days("fri,mon,mon,wed") == ["mon", "wed", "fri"]
+
+
+def test_parse_days_accepts_full_names():
+    assert parse_days("sunday,monday") == ["mon", "sun"]
+
+
+def test_parse_days_simple_range():
+    assert parse_days("mon-fri") == ["mon", "tue", "wed", "thu", "fri"]
+
+
+def test_parse_days_range_wraps_the_week():
+    # Sun–Thu is the common Gulf working week; it wraps past Sunday.
+    assert parse_days("sun-thu") == ["mon", "tue", "wed", "thu", "sun"]
+    assert parse_days("fri-mon") == ["mon", "fri", "sat", "sun"]
+
+
+def test_parse_days_rejects_unknown():
+    with pytest.raises(ScheduleError):
+        parse_days("funday")
+
+
+def test_format_days_uses_friendly_labels():
+    assert format_days(["mon", "tue", "wed", "thu", "fri"]) == "weekdays"
+    assert format_days(["sat", "sun"]) == "weekends"
+    assert format_days(schedule._ALL_DAYS) == "every day"
+    assert format_days(["sun", "mon", "tue"]) == "Mon, Tue, Sun"
+
+
+def test_schtasks_day_list_is_upper_and_ordered():
+    assert schtasks_day_list(["sun", "mon", "wed"]) == "MON,WED,SUN"
+
+
+def test_cron_day_field_round_trip():
+    assert cron_day_field(["mon", "tue", "wed", "thu", "fri"]) == "1,2,3,4,5"
+    assert cron_day_field(schedule._ALL_DAYS) == "*"
+    assert cron_field_to_days("1,2,3,4,0") == ["mon", "tue", "wed", "thu", "sun"]
+    assert cron_field_to_days("*") == schedule._ALL_DAYS
+
+
+# --- Windows command building --------------------------------------------------
+
+
 def test_task_name_strips_colon():
     assert task_name("16:30") == "JiraCheckinReminder_1630"
 
@@ -42,22 +106,15 @@ def test_windows_action_includes_notify_and_module():
 
 
 def test_windows_action_without_notify():
-    action = windows_action("pythonw.exe", notify=False)
-    assert action == '"pythonw.exe" -m jira_tool remind'
+    assert windows_action("pythonw.exe", notify=False) == '"pythonw.exe" -m jira_tool remind'
 
 
-def test_windows_create_args_weekdays():
-    args = windows_create_args("16:30", "weekdays", "ACTION")
+def test_windows_create_args_uses_day_list():
+    args = windows_create_args("16:30", "SUN,MON,TUE,WED,THU", "ACTION")
     assert args[:6] == ["schtasks", "/Create", "/F", "/TN", "JiraCheckinReminder_1630", "/TR"]
-    assert "/D" in args and "MON,TUE,WED,THU,FRI" in args
     assert args[args.index("/SC") + 1] == "WEEKLY"
+    assert args[args.index("/D") + 1] == "SUN,MON,TUE,WED,THU"
     assert args[args.index("/ST") + 1] == "16:30"
-
-
-def test_windows_create_args_daily_omits_day_list():
-    args = windows_create_args("08:00", "daily", "ACTION")
-    assert "/D" not in args
-    assert args[args.index("/SC") + 1] == "DAILY"
 
 
 def test_parse_task_times_reads_encoded_times():
@@ -67,6 +124,9 @@ def test_parse_task_times_reads_encoded_times():
         '"\\Some Other Task","N/A","Ready"\n'
     )
     assert parse_task_times(csv_text) == ["09:00", "16:30"]
+
+
+# --- cron block building -------------------------------------------------------
 
 
 def test_cron_line_orders_minute_then_hour():
@@ -88,29 +148,31 @@ def test_strip_managed_block_removes_only_the_block():
     assert strip_managed_block(text) == "0 9 * * * other\n"
 
 
-def test_parse_block_times_reads_the_block():
-    text = f"{CRON_BEGIN}\n30 16 * * 1-5 CMD\n0 9 * * 1-5 CMD\n{CRON_END}\n"
-    assert parse_block_times(text) == ["09:00", "16:30"]
+def test_parse_block_entries_keeps_per_time_days():
+    text = f"{CRON_BEGIN}\n30 16 * * 1,2,3,4,0 CMD\n0 9 * * 1-5 CMD\n{CRON_END}\n"
+    assert parse_block_entries(text) == {"16:30": "1,2,3,4,0", "09:00": "1-5"}
 
 
 def test_build_crontab_is_idempotent():
-    first = build_crontab("", ["16:30"], "1-5", "CMD")
-    second = build_crontab(first, ["16:30"], "1-5", "CMD")
+    first = build_crontab("", {"16:30": "1-5"}, "CMD")
+    second = build_crontab(first, parse_block_entries(first), "CMD")
     assert first == second
     assert first.count(CRON_BEGIN) == 1
     assert "30 16 * * 1-5 CMD" in first
 
 
 def test_build_crontab_preserves_foreign_lines():
-    existing = "0 9 * * * backup\n"
-    result = build_crontab(existing, ["12:00"], "*", "CMD")
+    result = build_crontab("0 9 * * * backup\n", {"12:00": "*"}, "CMD")
     assert result.startswith("0 9 * * * backup\n")
     assert "0 12 * * * CMD" in result
 
 
-def test_build_crontab_empty_times_clears_block():
+def test_build_crontab_empty_entries_clears_block():
     existing = f"keep\n{CRON_BEGIN}\n30 16 * * 1-5 CMD\n{CRON_END}\n"
-    assert build_crontab(existing, [], "1-5", "CMD") == "keep\n"
+    assert build_crontab(existing, {}, "CMD") == "keep\n"
+
+
+# --- end-to-end cron flow ------------------------------------------------------
 
 
 class FakeCrontab:
@@ -122,39 +184,33 @@ class FakeCrontab:
     def read(self):
         return self.text
 
-    def write(self, text, console):
+    def write(self, text):
         self.text = text
 
 
 def _use_cron_backend(monkeypatch):
-    """Force the non-Windows (cron) backend with an in-memory crontab."""
-    from rich.console import Console
-
-    from jira_tool import schedule as sched
-
     fake = FakeCrontab()
-    monkeypatch.setattr(sched.sys, "platform", "linux")
-    monkeypatch.setattr(sched, "_read_crontab", fake.read)
-    monkeypatch.setattr(sched, "_write_crontab", fake.write)
-    monkeypatch.setattr(sched, "windowless_python", lambda: "/usr/bin/python3")
-    return sched, fake, Console(file=__import__("io").StringIO())
+    monkeypatch.setattr(schedule.sys, "platform", "linux")
+    monkeypatch.setattr(schedule, "_read_crontab", fake.read)
+    monkeypatch.setattr(schedule, "_write_crontab", fake.write)
+    monkeypatch.setattr(schedule, "windowless_python", lambda: "/usr/bin/python3")
+    return fake, Console(file=io.StringIO())
 
 
-def test_cron_add_list_remove_flow(monkeypatch):
-    sched, fake, console = _use_cron_backend(monkeypatch)
+def test_cron_flow_preserves_each_reminders_days(monkeypatch):
+    fake, console = _use_cron_backend(monkeypatch)
 
-    sched.add_reminders(["16:30", "12:30"], "weekdays", True, console)
-    assert parse_block_times(fake.text) == ["12:30", "16:30"]
+    # A Sun–Thu reminder and a Mon–Fri reminder, added separately.
+    schedule.add_reminders(["09:00"], parse_days("sun-thu"), True, console)
+    schedule.add_reminders(["16:30"], parse_days("mon-fri"), True, console)
+    entries = parse_block_entries(fake.text)
+    assert entries == {"09:00": "1,2,3,4,0", "16:30": "1,2,3,4,5"}
 
-    # Adding another time unions with the existing ones.
-    sched.add_reminders(["09:00"], "weekdays", True, console)
-    assert parse_block_times(fake.text) == ["09:00", "12:30", "16:30"]
+    # Removing one must not rewrite the other's days.
+    schedule.add_reminders(["12:30"], parse_days("weekends"), True, console)
+    schedule.remove_reminders(["12:30"], console)
+    assert parse_block_entries(fake.text) == {"09:00": "1,2,3,4,0", "16:30": "1,2,3,4,5"}
 
-    # Removing a single time leaves the rest.
-    sched.remove_reminders(["12:30"], console)
-    assert parse_block_times(fake.text) == ["09:00", "16:30"]
-
-    # Removing with no times clears everything.
-    sched.remove_reminders(None, console)
-    assert parse_block_times(fake.text) == []
+    schedule.remove_reminders(None, console)
+    assert parse_block_entries(fake.text) == {}
     assert CRON_BEGIN not in fake.text

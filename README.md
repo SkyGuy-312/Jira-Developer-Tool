@@ -83,6 +83,22 @@ Pass `--at` as many times as you like (or comma-separate: `--at 12:30,16:30`)
 to get several reminders a day. Add `--no-notify` if you'd rather it just log
 to the console without a popup.
 
+**Choosing the days** with `--days` (default: weekdays) — useful when your work
+week isn't Mon–Fri or shifts around a release:
+
+```bash
+jira-tool schedule add --at 16:30 --days sun-thu      # Sun–Thu working week
+jira-tool schedule add --at 10:00 --days mon,wed,fri  # specific days
+jira-tool schedule add --at 09:00 --days daily        # every day (= --daily)
+jira-tool schedule add --at 18:00 --days weekends     # Sat–Sun crunch
+```
+
+`--days` accepts a keyword (`weekdays`, `weekends`, `daily`), a comma list of
+day names (`sun,mon,tue` — full names work too), or a range that may wrap the
+week (`sun-thu`, `fri-mon`). Each reminder keeps its own days, so you can mix a
+Sun–Thu reminder and a Mon–Fri one, and removing one won't disturb the other.
+`jira-tool schedule list` shows each reminder's time and days.
+
 Reminders **run in the background** — no console window flashes when they fire:
 
 - **Windows**: each time becomes a Task Scheduler entry whose action is

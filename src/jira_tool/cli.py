@@ -19,6 +19,7 @@ from .schedule import (
     add_reminders,
     list_reminders,
     normalize_times,
+    parse_days,
     remove_reminders,
 )
 from .utils import build_default_jql
@@ -147,16 +148,24 @@ def schedule_add(
         help="Reminder time HH:MM (24h). Repeat or comma-separate for several, "
         "e.g. --at 12:30 --at 16:30.",
     ),
+    days: Optional[str] = typer.Option(
+        None,
+        "--days",
+        help="Which days to run: a keyword (weekdays, weekends, daily), a list "
+        "(sun,mon,tue), or a range (sun-thu). Default: weekdays.",
+    ),
     daily: bool = typer.Option(
-        False, "--daily", help="Run every day instead of weekdays only."
+        False, "--daily", help="Shortcut for --days daily (every day)."
     ),
     notify: bool = typer.Option(
         True, "--notify/--no-notify", help="Raise a desktop notification (default: on)."
     ),
 ) -> None:
     """Schedule one or more daily reminders (runs 'remind' in the background)."""
+    day_spec = days if days else ("daily" if daily else "weekdays")
     try:
         times = normalize_times(at)
+        day_list = parse_days(day_spec)
     except ScheduleError as exc:
         console.print(f"[red]{exc}[/red]")
         raise typer.Exit(code=1)
@@ -164,7 +173,7 @@ def schedule_add(
         console.print("[red]Pass at least one --at HH:MM.[/red]")
         raise typer.Exit(code=1)
     try:
-        add_reminders(times, "daily" if daily else "weekdays", notify, console)
+        add_reminders(times, day_list, notify, console)
     except ScheduleError as exc:
         console.print(f"[red]{exc}[/red]")
         raise typer.Exit(code=1)
