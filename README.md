@@ -78,6 +78,11 @@ Cron (Linux/macOS), weekdays at 16:30:
 Windows Task Scheduler: create a daily task running
 `jira-tool.exe remind --notify`.
 
+When `--notify` is set, a toast is also raised if the tool **can't reach Jira
+at all** — e.g. you're off the VPN. Instead of a silent scheduled run that you'd
+mistake for "nothing stale", you get a "can't connect — is the VPN on?" nudge so
+you can reconnect and run `jira-tool checkin`.
+
 `--notify` picks a notification backend per platform:
 
 - **Linux**: `notify-send` — install libnotify if it's missing

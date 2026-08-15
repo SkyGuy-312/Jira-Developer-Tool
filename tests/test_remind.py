@@ -1,15 +1,24 @@
 import base64
 from io import StringIO
 
+import pytest
 from rich.console import Console
 
 from jira_tool import remind
+from jira_tool.config import Config
+from jira_tool.jira_client import JiraError
 from jira_tool.remind import (
     _applescript_string,
     _desktop_notify,
+    _failure_notification,
     _notify_command,
     _powershell_string,
+    run_remind,
 )
+
+
+def make_config():
+    return Config(base_url="https://jira.example.com", auth_method="pat", token="tok")
 
 
 def which_returning(*available):
@@ -70,3 +79,45 @@ def test_no_backend_prints_linux_hint(monkeypatch):
 def test_string_escaping_helpers():
     assert _applescript_string('a "quoted" \\ string') == '"a \\"quoted\\" \\\\ string"'
     assert _powershell_string("it's") == "'it''s'"
+
+
+def test_failure_notification_for_network_error_mentions_vpn():
+    title, message = _failure_notification(make_config(), JiraError("boom", status_code=None))
+    assert "can't connect" in title
+    assert "VPN" in message
+    assert "jira.example.com" in message
+
+
+def test_failure_notification_for_http_error_mentions_status():
+    title, message = _failure_notification(make_config(), JiraError("nope", status_code=401))
+    assert "401" in title
+    assert "401" in message
+
+
+def test_run_remind_notifies_on_connection_failure(monkeypatch):
+    error = JiraError("Could not reach Jira", status_code=None)
+    monkeypatch.setattr(
+        remind.JiraClient, "search_issues", lambda self, jql: (_ for _ in ()).throw(error)
+    )
+    calls = []
+    monkeypatch.setattr(remind, "_desktop_notify", lambda t, m, c: calls.append((t, m)))
+
+    with pytest.raises(JiraError):
+        run_remind(make_config(), Console(file=StringIO()), notify=True)
+
+    assert len(calls) == 1
+    assert "VPN" in calls[0][1]
+
+
+def test_run_remind_reraises_without_notify_when_flag_off(monkeypatch):
+    error = JiraError("Could not reach Jira", status_code=None)
+    monkeypatch.setattr(
+        remind.JiraClient, "search_issues", lambda self, jql: (_ for _ in ()).throw(error)
+    )
+    calls = []
+    monkeypatch.setattr(remind, "_desktop_notify", lambda t, m, c: calls.append((t, m)))
+
+    with pytest.raises(JiraError):
+        run_remind(make_config(), Console(file=StringIO()), notify=False)
+
+    assert calls == []

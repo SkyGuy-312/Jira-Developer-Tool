@@ -1,7 +1,8 @@
 """The daily reminder: report tickets that have gone quiet.
 
 Designed to be run from cron / a scheduled task; ``--notify`` additionally
-raises a desktop notification when stale tickets exist.
+raises a desktop notification when stale tickets exist, or when the tool
+can't reach Jira at all (e.g. the VPN is down) so the failure isn't silent.
 """
 
 from __future__ import annotations
@@ -10,20 +11,31 @@ import base64
 import shutil
 import subprocess
 import sys
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 from rich.console import Console
 
 from .config import Config
 from .display import issue_table
-from .jira_client import JiraClient
+from .jira_client import JiraClient, JiraError
 from .utils import build_default_jql, days_since
 
 
 def run_remind(config: Config, console: Console, notify: bool = False) -> int:
-    """Print the active-ticket report. Returns the number of stale tickets."""
+    """Print the active-ticket report. Returns the number of stale tickets.
+
+    Raises JiraError if Jira can't be reached; when ``notify`` is set, a
+    desktop notification about the failure is raised before re-raising so an
+    unattended scheduled run still surfaces the problem.
+    """
     client = JiraClient(config)
-    issues = client.search_issues(build_default_jql(config))
+    try:
+        issues = client.search_issues(build_default_jql(config))
+    except JiraError as exc:
+        if notify:
+            title, message = _failure_notification(config, exc)
+            _desktop_notify(title, message, console)
+        raise
     if not issues:
         console.print("[green]No active tickets.[/green]")
         return 0
@@ -50,6 +62,27 @@ def run_remind(config: Config, console: Console, notify: bool = False) -> int:
     else:
         console.print("\n[green]All active tickets have recent updates. Nice.[/green]")
     return len(stale)
+
+
+def _failure_notification(config: Config, error: JiraError) -> Tuple[str, str]:
+    """Craft a toast title/body for a failed Jira fetch.
+
+    A missing HTTP status means the request never got a response — most often
+    the VPN or network is down — so we nudge toward that. A real status code
+    means Jira answered but rejected us (auth, permissions, bad JQL).
+    """
+    host = config.base_url.split("://")[-1]
+    if error.status_code is None:
+        return (
+            "Jira reminder: can't connect",
+            f"Couldn't reach {host}. Is the VPN on? "
+            "Reconnect, then run jira-tool checkin.",
+        )
+    return (
+        f"Jira reminder: error {error.status_code}",
+        f"{host} rejected the request (HTTP {error.status_code}). "
+        "Check your token, then run jira-tool checkin.",
+    )
 
 
 def _desktop_notify(title: str, message: str, console: Console) -> None:
