@@ -14,6 +14,14 @@ from .config import DEFAULT_STATUSES, Config, ConfigError, load_config, save_con
 from .display import issue_table
 from .jira_client import JiraClient, JiraError
 from .remind import run_remind
+from .schedule import (
+    ScheduleError,
+    add_reminders,
+    list_reminders,
+    normalize_times,
+    parse_days,
+    remove_reminders,
+)
 from .utils import build_default_jql
 
 app = typer.Typer(
@@ -21,6 +29,11 @@ app = typer.Typer(
     no_args_is_help=True,
     add_completion=False,
 )
+schedule_app = typer.Typer(
+    help="Create and manage scheduled daily reminders.",
+    no_args_is_help=True,
+)
+app.add_typer(schedule_app, name="schedule")
 console = Console()
 
 
@@ -123,6 +136,72 @@ def remind(
     try:
         run_remind(config, console, notify=notify)
     except JiraError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(code=1)
+
+
+@schedule_app.command("add")
+def schedule_add(
+    at: List[str] = typer.Option(
+        ...,
+        "--at",
+        help="Reminder time HH:MM (24h). Repeat or comma-separate for several, "
+        "e.g. --at 12:30 --at 16:30.",
+    ),
+    days: Optional[str] = typer.Option(
+        None,
+        "--days",
+        help="Which days to run: a keyword (weekdays, weekends, daily), a list "
+        "(sun,mon,tue), or a range (sun-thu). Default: weekdays.",
+    ),
+    daily: bool = typer.Option(
+        False, "--daily", help="Shortcut for --days daily (every day)."
+    ),
+    notify: bool = typer.Option(
+        True, "--notify/--no-notify", help="Raise a desktop notification (default: on)."
+    ),
+) -> None:
+    """Schedule one or more daily reminders (runs 'remind' in the background)."""
+    day_spec = days if days else ("daily" if daily else "weekdays")
+    try:
+        times = normalize_times(at)
+        day_list = parse_days(day_spec)
+    except ScheduleError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(code=1)
+    if not times:
+        console.print("[red]Pass at least one --at HH:MM.[/red]")
+        raise typer.Exit(code=1)
+    try:
+        add_reminders(times, day_list, notify, console)
+    except ScheduleError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(code=1)
+
+
+@schedule_app.command("list")
+def schedule_list() -> None:
+    """List the reminders jira-tool has scheduled."""
+    try:
+        list_reminders(console)
+    except ScheduleError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(code=1)
+
+
+@schedule_app.command("remove")
+def schedule_remove(
+    at: Optional[List[str]] = typer.Option(
+        None,
+        "--at",
+        help="Remove only these times; omit to remove all jira-tool reminders.",
+    ),
+) -> None:
+    """Remove scheduled reminders (all of them, or just the given --at times)."""
+    try:
+        times = normalize_times(at) if at else None
+        remove_reminders(times, console)
+    except ScheduleError as exc:
         console.print(f"[red]{exc}[/red]")
         raise typer.Exit(code=1)
 
