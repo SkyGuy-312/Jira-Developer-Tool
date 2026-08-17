@@ -9,9 +9,10 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import List, Union
+from typing import Dict, List, Union
 
 DEFAULT_STATUSES = ["In Progress", "In Review"]
 
@@ -38,6 +39,18 @@ class Config:
     stale_after_days: float = 2.0
     verify_ssl: Union[bool, str] = True  # True/False, or a path to a CA bundle
 
+    # -- read layer (jira-tool show / search / mcp) --------------------------
+    # Custom fields to render, by display name. Empty = every non-empty one.
+    custom_fields: List[str] = field(default_factory=list)
+    # Field display names to drop from the rendered issue, allowlist or not.
+    hide_fields: List[str] = field(default_factory=list)
+    # Extra cross-references to pull out of issue text, {label: regex}. Issue
+    # keys are always extracted; this is for domain codes, e.g.
+    # {"DTCs": "\\b[BCPU][0-9A-F]{5}\\b"}.
+    ref_patterns: Dict[str, str] = field(default_factory=dict)
+    # How long a cached issue is served without asking Jira whether it moved.
+    cache_ttl_minutes: float = 15.0
+
     def __post_init__(self) -> None:
         self.base_url = self.base_url.rstrip("/")
         if self.auth_method not in ("pat", "basic"):
@@ -46,6 +59,13 @@ class Config:
             )
         if not self.base_url:
             raise ConfigError("base_url must not be empty.")
+        for label, pattern in self.ref_patterns.items():
+            try:
+                re.compile(pattern)
+            except re.error as exc:
+                raise ConfigError(
+                    f"ref_patterns[{label!r}] is not a valid regex: {exc}"
+                ) from exc
 
     @property
     def effective_token(self) -> str:

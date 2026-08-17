@@ -67,6 +67,86 @@ During a check-in, each ticket offers:
 Both `checkin` and `list` accept `--jql` to override the default query
 (`assignee = currentUser() AND status in (...) ORDER BY updated ASC`).
 
+## Reading tickets
+
+The check-in commands write to Jira; these read from it. A raw Jira issue is
+100–200 KB of JSON, most of it avatar URLs and empty custom fields — `show`
+renders the few KB that a person (or an agent) actually needs:
+
+```bash
+jira-tool show PROJ-1234              # the whole ticket as markdown
+jira-tool show PROJ-1234 --no-history --max-comments 5
+jira-tool show PROJ-1234 --json       # the normalised issue, for scripting
+jira-tool search "text ~ 'C1234F' ORDER BY updated DESC"
+jira-tool attach PROJ-1234            # list attachments
+jira-tool attach PROJ-1234 trace.asc  # download one (text is printed inline)
+```
+
+`show` prints the fields, environment, description, custom fields, linked
+issues and subtasks, every comment, the change history (reopens included),
+attachments and remote links — and ends with the issue keys and domain codes
+it found in the text, so a ticket can be followed to whatever it references.
+
+Reads are cached. Within `cache_ttl_minutes` (default 15) a ticket is served
+straight from disk; after that, one small request asks Jira whether the issue
+moved and only refetches if it did. If Jira can't be reached at all, the cached
+copy is served with a note rather than an error — useful off the VPN. Use
+`--refresh` to force a fetch, or `jira-tool cache-clear [KEY]` to drop it.
+
+## Using it from an AI agent (MCP)
+
+`jira-tool mcp` serves the read layer over the [Model Context
+Protocol](https://modelcontextprotocol.io) on stdio, so an agent can pull a
+ticket into a conversation instead of being told about it second-hand:
+`jira_issue`, `jira_search`, `jira_comments`, `jira_history`, `jira_attachment`.
+
+**The MCP surface is read-only by design.** Commenting, logging work and
+transitioning stay in `jira-tool checkin`, where a human presses the key — an
+agent posting to a team's Jira is visible to everyone and awkward to undo.
+
+Register it with Claude Code:
+
+```bash
+claude mcp add --scope user jira -- jira-tool mcp
+```
+
+or add it to an MCP client's config directly:
+
+```json
+{
+  "mcpServers": {
+    "jira": { "type": "stdio", "command": "jira-tool", "args": ["mcp"] }
+  }
+}
+```
+
+If `jira-tool` isn't on the launching process's PATH, use the interpreter
+instead: `"command": "python", "args": ["-m", "jira_tool", "mcp"]`.
+
+## Tuning what a ticket renders
+
+Optional keys in `config.json`, all of which affect `show` / `search` / MCP:
+
+| Key | What it does |
+| --- | --- |
+| `custom_fields` | Custom fields to render, by display name. Empty (default) = every non-empty one. |
+| `hide_fields` | Field display names to drop. |
+| `ref_patterns` | `{label: regex}` of domain codes to extract from issue text, alongside the issue keys that are always extracted. |
+| `cache_ttl_minutes` | How long a cached issue is served without asking Jira (default 15). |
+
+For example, to pull diagnostic trouble codes out of ticket text and keep the
+field list to what matters on a bug:
+
+```json
+{
+  "custom_fields": ["Severity", "Root Cause", "Found In Build"],
+  "ref_patterns": { "DTCs": "\\b[BCPU][0-9A-F]{5}\\b" }
+}
+```
+
+Custom-field ids are resolved to their display names automatically (the map is
+fetched once and cached for a week).
+
 ## Scheduling the reminder
 
 Let the tool set up the schedule for you — no schtasks or crontab wrangling:
@@ -164,6 +244,18 @@ Layout: `src/jira_tool/` — `jira_client.py` (thin REST v2 wrapper),
 `schedule.py` (scheduler backends), `cli.py` (Typer entry points),
 `config.py`, `display.py`, `utils.py`.
 
+The read path is a separate stack over the same client: `read.py` (fetch and
+normalise — this is where the Jira quirks live: wiki markup vs. ADF, the four
+shapes a custom-field value takes, embedded-vs-paginated comments), `render.py`
+(normalised issue → markdown), `cache.py`, and `mcp_server.py`.
+
+Two invariants to preserve when changing them:
+
+- `read.py` and `render.py` must not import rich or typer, and must not print.
+  The MCP server shares them, and there stdout carries protocol messages only.
+- `render.py` is pure: dict in, string out. It makes the output testable
+  without a Jira, which is the only reason the renderers have real coverage.
+
 ## Roadmap
 
 - **Git-aware drafting** — read your recent branches/commits (branch names
@@ -171,3 +263,5 @@ Layout: `src/jira_tool/` — `jira_client.py` (thin REST v2 wrapper),
   from them, so a check-in becomes "accept / edit / skip" per ticket.
 - Detect merged PRs and suggest closing the matching ticket.
 - Tempo worklog support, if native worklogs aren't what your team uses.
+- Resolve a ticket key to its local commits, so `show` can list the code that
+  claimed to fix the bug next to the comments that reported it.

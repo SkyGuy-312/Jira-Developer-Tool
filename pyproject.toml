@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "jira-developer-tool"
-version = "0.1.6"
-description = "Interactive daily check-in CLI that keeps your Jira tickets updated: comments, worklogs, and closing with resolutions."
+version = "0.2.0"
+description = "Jira from the terminal for developers: an interactive daily check-in that keeps your tickets updated, plus a read layer that renders a whole ticket as markdown and serves it to AI agents over MCP."
 readme = "README.md"
 requires-python = ">=3.9"
 license = { file = "LICENSE" }

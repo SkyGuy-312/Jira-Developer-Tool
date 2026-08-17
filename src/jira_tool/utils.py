@@ -35,6 +35,20 @@ def days_since(value: str, now: Optional[datetime] = None) -> float:
     return delta.total_seconds() / 86400
 
 
+def format_timestamp(value: Optional[str]) -> str:
+    """A Jira timestamp as 'YYYY-MM-DD HH:MM', or the raw value if unparsable.
+
+    Unlike parse_jira_datetime this never raises: rendering a whole issue must
+    not fail because one instance emits a timestamp in an unexpected shape.
+    """
+    if not value:
+        return "—"
+    try:
+        return parse_jira_datetime(value).strftime("%Y-%m-%d %H:%M")
+    except (ValueError, TypeError):
+        return str(value)
+
+
 def build_default_jql(config: Config) -> str:
     quoted = ", ".join(f'"{status}"' for status in config.statuses)
     return (
